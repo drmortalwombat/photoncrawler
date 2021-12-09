@@ -379,17 +379,17 @@ void vec3_bend(Vector3 * vd, const Vector3 * vs, float chi1, float chi2)
 
 void mat3_ident(Matrix3 * m)
 {
-	m->m[0] = 1;
-	m->m[1] = 0;
-	m->m[2] = 0;
+	m->m[0] = 1.0;
+	m->m[1] = 0.0;
+	m->m[2] = 0.0;
 
-	m->m[3] = 0;
-	m->m[4] = 1;
-	m->m[5] = 0;
+	m->m[3] = 0.0;
+	m->m[4] = 1.0;
+	m->m[5] = 0.0;
 
-	m->m[6] = 0;
-	m->m[7] = 0;
-	m->m[8] = 1;
+	m->m[6] = 0.0;
+	m->m[7] = 0.0;
+	m->m[8] = 1.0;
 }
 
 void mat3_scale(Matrix3 * md, float s)
@@ -472,7 +472,7 @@ void vec3_mmul(Vector3 * vd, const Matrix3 * m, const Vector3 * vs)
 {
 	Vector3	vt;
 	for(char i=0; i<3; i++)
-		vt.v[i] = m->m[0] * vs->v[0] + m->m[3 + i] * vs->v[1] + m->m[6 + i] * vs->v[2];
+		vt.v[i] = m->m[i] * vs->v[0] + m->m[3 + i] * vs->v[1] + m->m[6 + i] * vs->v[2];
 	*vd = vt;
 }
 
@@ -824,7 +824,7 @@ void vec4_mmul(Vector4 * vd, const Matrix4 * m, const Vector4 * vs)
 {
 	Vector4	vt;
 	for(char i=0; i<4; i++)
-		vt.v[i] = m->m[0] * vs->v[0] + m->m[4 + i] * vs->v[1] + m->m[8 + i] * vs->v[2] + m->m[12 + i] * vs->v[i];
+		vt.v[i] = m->m[0 + i] * vs->v[0] + m->m[4 + i] * vs->v[1] + m->m[8 + i] * vs->v[2] + m->m[12 + i] * vs->v[i];
 	*vd = vt;
 }
 

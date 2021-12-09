@@ -6,65 +6,192 @@
 #include "vector3d.h"
 #include "rgbimage.h"
 
-Vector3	surfaceBase = {{0, -20, 0}};
-Vector3 surfaceNorm = {{0, 1, 0}};
-Vector3 surfaceColor = {{1, 0, 0}};
-
-Vector3 sphereCenter = {{0, 0, 0}};
-float sphereRadius = 30;
-Vector3 sphereColor = {{0, 1, 0}};
-
-Vector3 backgroundColor = {{0, 0, 0}};
+Vector3 backgroundColor = {{0.7, 0.7, 1.0}};
 
 float	width, height;
 Vector3	viewP, viewZ, viewX, viewY;
 
 float infinity = 10000000;
 
-Vector3 trace(Vector3 * pos, Vector3 * dir) 
+struct Solid
 {
-	float	surfaceDistance = -infinity;
-	float	sphereDistance = -infinity;
+	Vector3		pos, norm, color;
+	float		radius;
 
-	float	nd = vec3_vmul(dir, &surfaceNorm);
+	Solid	*	next;
+
+	float (* distance)(Solid * solid, const Vector3 * pos, const Vector3 * dir);
+	Vector3 (* normal)(Solid * solid, const Vector3 * pos);
+};
+
+float sphere_distance(Solid * solid, const Vector3 * pos, const Vector3 * dir)
+{
+	Vector3	sc;
+	vec3_diff(&sc, pos, &solid->pos);
+
+	float	q = vec3_vmul(&sc, &sc) - solid->radius * solid->radius;
+	float	p = 2 * vec3_vmul(&sc, dir);
+
+	float	det = p * p * 0.25 - q;
 	
+	if (det >= 0)
+		return - 0.5 * p - sqrt(det);
+
+	return -infinity;
+}
+
+Vector3 sphere_normal(Solid * solid, const Vector3 * pos)
+{
+	Vector3	sc;
+	vec3_diff(&sc, pos, &solid->pos);
+	vec3_norm(&sc);
+
+//	printf("S %f %f %f\n", sc.v[0], sc.v[1], sc.v[2]);
+
+	return sc;
+}
+
+void sphere_init(Solid * solid, const Vector3 * center, float radius, const Vector3 * color)
+{
+	solid->pos = *center;
+	solid->radius = radius;
+	solid->color = *color;
+	solid->distance = sphere_distance;
+	solid->normal = sphere_normal;
+}
+
+float halfspace_distance(Solid * solid, const Vector3 * pos, const Vector3 * dir)
+{
+	float nd = vec3_vmul(dir, &solid->norm);
+			
 	if (nd != 0)
 	{
-		Vector3	vd;
-		vec3_diff(&vd, &surfaceBase, pos);		
-		surfaceDistance = vec3_vmul(&vd, &surfaceNorm) / nd;
+		Vector3	sc;
+		vec3_diff(&sc, &solid->pos, pos);
+		return vec3_vmul(&sc, &solid->norm) / nd;
 	}
-	
-	Vector3	sc;
-	vec3_diff(&sc, pos, &sphereCenter);
-	float	q = vec3_vmul(&sc, &sc) - sphereRadius * sphereRadius;
-	float	p = 2 * vec3_vmul(&sc, dir);
-	float	det = p * p * 0.25 - q;
-	if (det >= 0)
-		sphereDistance = - 0.5 * p - sqrt(det);
-	
-	if (surfaceDistance > 0 && (surfaceDistance < sphereDistance || sphereDistance < 0))
-		return surfaceColor;
-	else if (sphereDistance > 0)
-		return sphereColor;
+
+	return -infinity;
+}
+
+Vector3 halfspace_normal(Solid * solid, const Vector3 * pos)
+{
+	return solid->norm;
+}
+
+void halfspace_init(Solid * solid, const Vector3 * pos, const Vector3 * norm, const Vector3 * color)
+{
+	solid->pos = *pos;
+	solid->norm = *norm;
+	solid->color = *color;
+	solid->distance = halfspace_distance;
+	solid->normal = halfspace_normal;
+}
+
+struct Scene
+{
+	Solid	*	solids;
+	Vector3		light;
+}
+
+void scene_init(Scene * scene)
+{
+	scene->solids = nullptr;
+	scene->light.v[0] = -1; scene->light.v[1] = 1; scene->light.v[2] = -1;
+	vec3_norm(&scene->light);	
+}
+
+void scene_add_solid(Scene * scene, Solid * solid)
+{
+	solid->next = scene->solids;
+	scene->solids = solid;
+}
+
+Vector3 scene_trace(Scene * scene, const Vector3 * pos, const Vector3 * dir)
+{
+	float		distance = infinity;
+	Solid * 	shape = scene->solids, * nearest = nullptr;
+
+	while (shape)
+	{
+		float	sd = shape->distance(shape, pos, dir);
+		if (sd > 0 && sd < distance) {
+			nearest = shape;
+			distance = sd;
+		}
+		shape = shape->next;
+	}
+
+	if (nearest) 
+	{
+		Vector3	at, norm;
+		vec3_lincomb(&at, pos, distance, dir);
+
+		norm.v[0] = 1.0;
+		norm.v[1] = 2.0;
+		norm.v[2] = 3.0;
+
+		Vector3	color = nearest->color;
+		norm = nearest->normal(nearest, &at);
+//		norm = sphere_normal(nearest, &at);
+
+//		printf("N %f %f %f\n", norm.v[0], norm.v[1], norm.v[2]);
+
+		float lcos = vec3_vmul(&scene->light, &norm);
+
+//		printf("LC %f : %f\n", norm.v[1], scene->light.v[2]);
+
+		if (lcos < 0)
+			lcos = 0;
+
+
+		vec3_scale(&color, lcos * 0.9 + 0.1);
+
+		return color;
+	}
 	else
 		return backgroundColor;
 }
 
-void trace_start()
+
+
+void trace_start(Scene * scene)
 {
 	width = 320.0;
 	height = 200.0;
 				
 	float	vof = tan(90 * PI / 360);
 			
+	Matrix3	viewm;
+	mat3_set_rotate_x(&viewm, -0.2);
+//	mat3_ident(&viewm);
+#if 0
+	printf("M: %f %f %f   %f %f %f   %f %f %f\n", 
+		viewm.m[0], 
+		viewm.m[1], 
+		viewm.m[2], 
+		viewm.m[3], 
+		viewm.m[4], 
+		viewm.m[5], 
+		viewm.m[6], 
+		viewm.m[7], 
+		viewm.m[8]);
+#endif
 	viewP.v[0] = 0; viewP.v[1] = 50; viewP.v[2] = -200;
 	viewZ.v[0] = 0; viewZ.v[1] = 0; viewZ.v[2] = 1;
 	viewX.v[0] = vof; viewX.v[1] = 0; viewX.v[2] = 0;
 	viewY.v[0] = 0; viewY.v[1] = vof; viewY.v[2] = 0;
+
+	vec3_mmul(&viewX, &viewm, &viewX);
+	vec3_mmul(&viewY, &viewm, &viewY);
+	vec3_mmul(&viewZ, &viewm, &viewZ);
+#if 0
+	printf("X: %f %f %f\n", viewX.v[0], viewX.v[1], viewX.v[2]);
+	printf("Y: %f %f %f\n", viewY.v[0], viewY.v[1], viewY.v[2]);
+#endif
 }
 
-Vector3 trace_pixel(char ix, char iy)
+Vector3 trace_pixel(Scene * scene, int ix, int iy)
 {
 	float	tx = (float)ix, ty = (float)iy;
 
@@ -77,7 +204,7 @@ Vector3 trace_pixel(char ix, char iy)
 
 	vec3_norm(&vn);
 
-	Vector3	c = trace(&viewP, &vn);
+	Vector3	c = scene_trace(scene, &viewP, &vn);
 
 	return c;
 }
@@ -92,7 +219,8 @@ static char cscale(float f)
 	else
 		return fi;
 }
-void trace_frame()
+
+void trace_frame(Scene * scene)
 {
 	for(char iy=0; iy<25; iy++)
 	{
@@ -102,7 +230,7 @@ void trace_frame()
 			{
 				for(char x=0; x<4; x++)
 				{
-					Vector3	c = trace_pixel(ix * 8 + 2 * x, iy * 8 + y);
+					Vector3	c = trace_pixel(scene, ix * 8 + 2 * x, iy * 8 + y);
 
 					rgbblock[y][x].r = cscale(c.v[0]);
 					rgbblock[y][x].g = cscale(c.v[1]);
@@ -132,8 +260,30 @@ int main(void)
 
 	rgbimg_begin();
 
-	trace_start();
-	trace_frame();
+	Scene	scene;
+	Solid	ground, sphere1, sphere2;
+	Vector3	pos, norm, color;
+
+	scene_init(&scene);
+	
+	pos.v[0] = -20; pos.v[1] = 0; pos.v[2] = 0;
+	color.v[0] = 0.0; color.v[1] = 1.0; color.v[2] = 0.0;
+	sphere_init(&sphere1, &pos, 30, &color);
+	scene_add_solid(&scene, &sphere1);
+
+	pos.v[0] = 40; pos.v[1] = 5; pos.v[2] = 5;
+	color.v[0] = 0.0; color.v[1] = 0.0; color.v[2] = 1.0;
+	sphere_init(&sphere2, &pos, 40, &color);
+	scene_add_solid(&scene, &sphere2);
+
+	pos.v[0] = 0; pos.v[1] = -20; pos.v[2] = 0;
+	norm.v[0] = 0; norm.v[1] = 1; norm.v[2] = 0;
+	color.v[0] = 1.0; color.v[1] = 0.2; color.v[2] = 0.2;
+	halfspace_init(&ground, &pos, &norm, &color);
+	scene_add_solid(&scene, &ground);
+
+	trace_start(&scene);
+	trace_frame(&scene);
 
 #if 0
 
