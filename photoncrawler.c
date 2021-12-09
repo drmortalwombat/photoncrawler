@@ -12,17 +12,64 @@ float	width, height;
 Vector3	viewP, viewZ, viewX, viewY;
 
 float infinity = 10000000;
+float epsilon = 0.01;
+
+struct Material
+{
+	Vector3	color1, color2;
+	float	size;
+
+	Vector3 (* colorat)(Material * mat, const Vector3 * pos);
+};
+
+Vector3 solidmat_colorat(Material * mat, const Vector3 * pos)
+{
+	return mat->color1;
+}
+
+Vector3 checkermat_colorat(Material * mat, const Vector3 * pos)
+{
+	int	ix = (int)floor(pos->v[0] / mat->size);
+	int	iy = (int)floor(pos->v[1] / mat->size);
+	int	iz = (int)floor(pos->v[2] / mat->size);
+			
+	if ((ix ^ iy ^ iz) & 1)
+		return mat->color1;
+	else
+		return mat->color2;
+}
+
+void solidmat_init(Material * mat, const Vector3 * color)
+{
+	mat->color1 = *color;
+	mat->colorat = solidmat_colorat;
+}
+
+void checkermat_init(Material * mat, const Vector3 * color1, const Vector3 * color2, float size)
+{
+	mat->color1 = *color1;
+	mat->color2 = *color2;
+	mat->size = size;
+	mat->colorat = checkermat_colorat;
+}
 
 struct Solid
 {
-	Vector3		pos, norm, color;
-	float		radius;
+	Vector3			pos, norm;
+	float			radius;
+	Material	*	material;
 
 	Solid	*	next;
 
 	float (* distance)(Solid * solid, const Vector3 * pos, const Vector3 * dir);
 	Vector3 (* normal)(Solid * solid, const Vector3 * pos);
+	Vector3 (* colorat)(Solid * solid, const Vector3 * pos);
 };
+
+Vector3 solid_colorat(Solid * solid, const Vector3 * pos)
+{
+	return solid->material->colorat(solid->material, pos);
+}
 
 float sphere_distance(Solid * solid, const Vector3 * pos, const Vector3 * dir)
 {
@@ -46,18 +93,17 @@ Vector3 sphere_normal(Solid * solid, const Vector3 * pos)
 	vec3_diff(&sc, pos, &solid->pos);
 	vec3_norm(&sc);
 
-//	printf("S %f %f %f\n", sc.v[0], sc.v[1], sc.v[2]);
-
 	return sc;
 }
 
-void sphere_init(Solid * solid, const Vector3 * center, float radius, const Vector3 * color)
+void sphere_init(Solid * solid, const Vector3 * center, float radius, Material * mat)
 {
 	solid->pos = *center;
 	solid->radius = radius;
-	solid->color = *color;
+	solid->material = mat;
 	solid->distance = sphere_distance;
 	solid->normal = sphere_normal;
+	solid->colorat = solid_colorat;
 }
 
 float halfspace_distance(Solid * solid, const Vector3 * pos, const Vector3 * dir)
@@ -79,13 +125,14 @@ Vector3 halfspace_normal(Solid * solid, const Vector3 * pos)
 	return solid->norm;
 }
 
-void halfspace_init(Solid * solid, const Vector3 * pos, const Vector3 * norm, const Vector3 * color)
+void halfspace_init(Solid * solid, const Vector3 * pos, const Vector3 * norm, Material * mat)
 {
 	solid->pos = *pos;
 	solid->norm = *norm;
-	solid->color = *color;
+	solid->material = mat;
 	solid->distance = halfspace_distance;
 	solid->normal = halfspace_normal;
+	solid->colorat = solid_colorat;
 }
 
 struct Scene
@@ -105,6 +152,24 @@ void scene_add_solid(Scene * scene, Solid * solid)
 {
 	solid->next = scene->solids;
 	scene->solids = solid;
+}
+
+bool scene_intersects(Scene * scene, const Vector3 * pos, const Vector3 * dir, Solid * exclude)
+{
+	Solid * 	shape = scene->solids;
+
+	while (shape)
+	{
+		if (shape != exclude)
+		{
+			float	sd = shape->distance(shape, pos, dir);
+			if (sd > epsilon)
+				return true;
+		}
+		shape = shape->next;
+	}
+
+	return false;
 }
 
 Vector3 scene_trace(Scene * scene, const Vector3 * pos, const Vector3 * dir)
@@ -127,25 +192,19 @@ Vector3 scene_trace(Scene * scene, const Vector3 * pos, const Vector3 * dir)
 		Vector3	at, norm;
 		vec3_lincomb(&at, pos, distance, dir);
 
-		norm.v[0] = 1.0;
-		norm.v[1] = 2.0;
-		norm.v[2] = 3.0;
+		Vector3	color = nearest->colorat(nearest, &at);
 
-		Vector3	color = nearest->color;
-		norm = nearest->normal(nearest, &at);
-//		norm = sphere_normal(nearest, &at);
+		float	light = 0.1;
+		if (!scene_intersects(scene, &at, &scene->light, nearest)) {
+	
+			norm = nearest->normal(nearest, &at);
 
-//		printf("N %f %f %f\n", norm.v[0], norm.v[1], norm.v[2]);
+			float lcos = vec3_vmul(&scene->light, &norm);
+			if (lcos > 0)
+				light += 0.9 * lcos;
+		}
 
-		float lcos = vec3_vmul(&scene->light, &norm);
-
-//		printf("LC %f : %f\n", norm.v[1], scene->light.v[2]);
-
-		if (lcos < 0)
-			lcos = 0;
-
-
-		vec3_scale(&color, lcos * 0.9 + 0.1);
+		vec3_scale(&color, light);
 
 		return color;
 	}
@@ -163,7 +222,7 @@ void trace_start(Scene * scene)
 	float	vof = tan(90 * PI / 360);
 			
 	Matrix3	viewm;
-	mat3_set_rotate_x(&viewm, -0.2);
+	mat3_set_rotate_x(&viewm, -0.22);
 //	mat3_ident(&viewm);
 #if 0
 	printf("M: %f %f %f   %f %f %f   %f %f %f\n", 
@@ -260,26 +319,35 @@ int main(void)
 
 	rgbimg_begin();
 
-	Scene	scene;
-	Solid	ground, sphere1, sphere2;
-	Vector3	pos, norm, color;
+	Scene		scene;
+	Solid		ground, sphere1, sphere2;
+	Material	smat1, smat2, cmat;
+	Vector3		pos, norm, color1, color2;
 
 	scene_init(&scene);
+
+	color1.v[0] = 0.0; color1.v[1] = 1.0; color1.v[2] = 0.0;
+	solidmat_init(&smat1, &color1);
+
+	color1.v[0] = 0.0; color1.v[1] = 0.0; color1.v[2] = 1.0;
+	solidmat_init(&smat2, &color1);
+
+	color1.v[0] = 1.0; color1.v[1] = 1.0; color1.v[2] = 1.0;
+	color2.v[0] = 0.2; color2.v[1] = 0.2; color2.v[2] = 0.2;
 	
-	pos.v[0] = -20; pos.v[1] = 0; pos.v[2] = 0;
-	color.v[0] = 0.0; color.v[1] = 1.0; color.v[2] = 0.0;
-	sphere_init(&sphere1, &pos, 30, &color);
+	checkermat_init(&cmat, &color1, &color2, 10);
+
+	pos.v[0] = -20; pos.v[1] = 15; pos.v[2] = 0;
+	sphere_init(&sphere1, &pos, 30, &smat1);
 	scene_add_solid(&scene, &sphere1);
 
 	pos.v[0] = 40; pos.v[1] = 5; pos.v[2] = 5;
-	color.v[0] = 0.0; color.v[1] = 0.0; color.v[2] = 1.0;
-	sphere_init(&sphere2, &pos, 40, &color);
+	sphere_init(&sphere2, &pos, 40, &smat2);
 	scene_add_solid(&scene, &sphere2);
 
 	pos.v[0] = 0; pos.v[1] = -20; pos.v[2] = 0;
 	norm.v[0] = 0; norm.v[1] = 1; norm.v[2] = 0;
-	color.v[0] = 1.0; color.v[1] = 0.2; color.v[2] = 0.2;
-	halfspace_init(&ground, &pos, &norm, &color);
+	halfspace_init(&ground, &pos, &norm, &cmat);
 	scene_add_solid(&scene, &ground);
 
 	trace_start(&scene);
