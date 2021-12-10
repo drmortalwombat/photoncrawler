@@ -7,9 +7,14 @@
 #include "rgbimage.h"
 
 Vector3 backgroundColor = {{0.7, 0.7, 1.0}};
+Vector3  SkyBaseColor = {{0.0, 0.0, 0.8}};
+Vector3  SkyHorizonColor = {{0.4, 0.4, 0.0}};
+
+Vector3 White = {{1.0, 1.0, 1.0}};
 
 float	width, height;
 Vector3	viewP, viewZ, viewX, viewY;
+
 
 float infinity = 10000000;
 float epsilon = 0.01;
@@ -17,7 +22,7 @@ float epsilon = 0.01;
 struct Material
 {
 	Vector3	color1, color2;
-	float	size;
+	float	size, mirror;
 
 	Vector3 (* colorat)(Material * mat, const Vector3 * pos);
 };
@@ -25,6 +30,11 @@ struct Material
 Vector3 solidmat_colorat(Material * mat, const Vector3 * pos)
 {
 	return mat->color1;
+}
+
+Vector3 mirrormat_colorat(Material * mat, const Vector3 * pos)
+{
+	return White;
 }
 
 Vector3 checkermat_colorat(Material * mat, const Vector3 * pos)
@@ -43,6 +53,7 @@ void solidmat_init(Material * mat, const Vector3 * color)
 {
 	mat->color1 = *color;
 	mat->colorat = solidmat_colorat;
+	mat->mirror = 0.0;
 }
 
 void checkermat_init(Material * mat, const Vector3 * color1, const Vector3 * color2, float size)
@@ -51,6 +62,13 @@ void checkermat_init(Material * mat, const Vector3 * color1, const Vector3 * col
 	mat->color2 = *color2;
 	mat->size = size;
 	mat->colorat = checkermat_colorat;
+	mat->mirror = 0.0;
+}
+
+void mirrormat_init(Material * mat, float mirror)
+{
+	mat->colorat = mirrormat_colorat;
+	mat->mirror = mirror;
 }
 
 struct Solid
@@ -144,7 +162,7 @@ struct Scene
 void scene_init(Scene * scene)
 {
 	scene->solids = nullptr;
-	scene->light.v[0] = -1; scene->light.v[1] = 1; scene->light.v[2] = -1;
+	scene->light.v[0] = -2; scene->light.v[1] = 1; scene->light.v[2] = -1;
 	vec3_norm(&scene->light);	
 }
 
@@ -163,6 +181,8 @@ bool scene_intersects(Scene * scene, const Vector3 * pos, const Vector3 * dir, S
 		if (shape != exclude)
 		{
 			float	sd = shape->distance(shape, pos, dir);
+//			printf("");
+//			printf("%f, %f, %f -> %f\n", pos->v[0], pos->v[1], pos->v[2], sd);
 			if (sd > epsilon)
 				return true;
 		}
@@ -191,25 +211,46 @@ Vector3 scene_trace(Scene * scene, const Vector3 * pos, const Vector3 * dir)
 	{
 		Vector3	at, norm;
 		vec3_lincomb(&at, pos, distance, dir);
+		norm = nearest->normal(nearest, &at);
 
-		Vector3	color = nearest->colorat(nearest, &at);
+		if (nearest->material->mirror > 0) 
+		{
+			Vector3	ndir, nat;
 
-		float	light = 0.1;
-		if (!scene_intersects(scene, &at, &scene->light, nearest)) {
-	
-			norm = nearest->normal(nearest, &at);
+			vec3_lincomb(&ndir, dir, -2.0 * vec3_vmul(dir, &norm), &norm);
+			vec3_lincomb(&nat, &at, epsilon, &ndir);
 
-			float lcos = vec3_vmul(&scene->light, &norm);
-			if (lcos > 0)
-				light += 0.9 * lcos;
+			Vector3	color = scene_trace(scene, &nat, &ndir);
+			vec3_scale(&color, nearest->material->mirror);
+
+			return color;
 		}
+		else
+		{
+			Vector3	color = nearest->colorat(nearest, &at);
 
-		vec3_scale(&color, light);
+			float	light = 0.1;
 
-		return color;
+			if (!scene_intersects(scene, &at, &scene->light, nearest)) 
+			{
+		
+
+				float lcos = vec3_vmul(&scene->light, &norm);
+				if (lcos > 0)
+					light += 0.9 * lcos;
+			}
+
+			vec3_scale(&color, light);
+
+			return color;
+		}
 	}
 	else
-		return backgroundColor;
+	{
+		Vector3	color;
+		vec3_lincomb(&color, &SkyBaseColor, 1.0 - dir->v[1], &SkyHorizonColor);
+		return color;
+	}
 }
 
 
@@ -320,8 +361,8 @@ int main(void)
 	rgbimg_begin();
 
 	Scene		scene;
-	Solid		ground, sphere1, sphere2;
-	Material	smat1, smat2, cmat;
+	Solid		ground, sphere1, sphere2, sphere3;
+	Material	smat1, smat2, cmat, mmat;
 	Vector3		pos, norm, color1, color2;
 
 	scene_init(&scene);
@@ -329,26 +370,31 @@ int main(void)
 	color1.v[0] = 0.0; color1.v[1] = 1.0; color1.v[2] = 0.0;
 	solidmat_init(&smat1, &color1);
 
-	color1.v[0] = 0.0; color1.v[1] = 0.0; color1.v[2] = 1.0;
+	color1.v[0] = 1.0; color1.v[1] = 0.0; color1.v[2] = 0.0;
 	solidmat_init(&smat2, &color1);
 
 	color1.v[0] = 1.0; color1.v[1] = 1.0; color1.v[2] = 1.0;
-	color2.v[0] = 0.2; color2.v[1] = 0.2; color2.v[2] = 0.2;
-	
+	color2.v[0] = 0.2; color2.v[1] = 0.2; color2.v[2] = 0.2;	
 	checkermat_init(&cmat, &color1, &color2, 10);
 
-	pos.v[0] = -20; pos.v[1] = 15; pos.v[2] = 0;
+	mirrormat_init(&mmat, 0.9);
+
+	pos.v[0] = -35; pos.v[1] = 0; pos.v[2] = 0;
 	sphere_init(&sphere1, &pos, 30, &smat1);
 	scene_add_solid(&scene, &sphere1);
 
-	pos.v[0] = 40; pos.v[1] = 5; pos.v[2] = 5;
+	pos.v[0] = 40; pos.v[1] = 10; pos.v[2] = 5;
 	sphere_init(&sphere2, &pos, 40, &smat2);
 	scene_add_solid(&scene, &sphere2);
 
-	pos.v[0] = 0; pos.v[1] = -20; pos.v[2] = 0;
+	pos.v[0] = 0; pos.v[1] = -30; pos.v[2] = 0;
 	norm.v[0] = 0; norm.v[1] = 1; norm.v[2] = 0;
 	halfspace_init(&ground, &pos, &norm, &cmat);
 	scene_add_solid(&scene, &ground);
+
+	pos.v[0] = 10; pos.v[1] = 20; pos.v[2] = 80;
+	sphere_init(&sphere3, &pos, 40, &mmat);
+	scene_add_solid(&scene, &sphere3);
 
 	trace_start(&scene);
 	trace_frame(&scene);
