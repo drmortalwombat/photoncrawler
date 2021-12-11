@@ -370,9 +370,11 @@ void vec3_bend(Vector3 * vd, const Vector3 * vs, float chi1, float chi2)
 	float	m1 = cos(2 * PI * chi1) * sqrt(chi2);
 	float	m2 = sin(2 * PI * chi1) * sqrt(chi2);
 
-	vd->v[0] = vs->v[0] * m0 + hn1x * m1 + hn2x * m2;
-	vd->v[1] = vs->v[1] * m0 + hn1y * m1 + hn2y * m2;
-	vd->v[2] = vs->v[2] * m0 + hn1z * m1 + hn2z * m2;
+	Vector3	vt;
+	vt.v[0] = vs->v[0] * m0 + hn1x * m1 + hn2x * m2;
+	vt.v[1] = vs->v[1] * m0 + hn1y * m1 + hn2y * m2;
+	vt.v[2] = vs->v[2] * m0 + hn1z * m1 + hn2z * m2;
+	*vd = vt;
 }
 
 

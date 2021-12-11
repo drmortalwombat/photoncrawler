@@ -11,6 +11,7 @@ Vector3  SkyBaseColor = {{0.0, 0.0, 0.8}};
 Vector3  SkyHorizonColor = {{0.4, 0.4, 0.0}};
 
 Vector3 White = {{1.0, 1.0, 1.0}};
+Vector3 Black = {{0.0, 0.0, 0.0}};
 
 float	width, height;
 Vector3	viewP, viewZ, viewX, viewY;
@@ -22,7 +23,7 @@ float epsilon = 0.01;
 struct Material
 {
 	Vector3	color1, color2;
-	float	size, mirror;
+	float	size, mirror, shiny, transparency;
 
 	Vector3 (* colorat)(Material * mat, const Vector3 * pos);
 };
@@ -49,26 +50,32 @@ Vector3 checkermat_colorat(Material * mat, const Vector3 * pos)
 		return mat->color2;
 }
 
-void solidmat_init(Material * mat, const Vector3 * color)
+void solidmat_init(Material * mat, const Vector3 * color, float mirror, float shiny)
 {
 	mat->color1 = *color;
 	mat->colorat = solidmat_colorat;
-	mat->mirror = 0.0;
+	mat->mirror = mirror;
+	mat->shiny = shiny;
+	mat->transparency = 0.0;
 }
 
-void checkermat_init(Material * mat, const Vector3 * color1, const Vector3 * color2, float size)
+void checkermat_init(Material * mat, const Vector3 * color1, const Vector3 * color2, float size, float shiny)
 {
 	mat->color1 = *color1;
 	mat->color2 = *color2;
 	mat->size = size;
 	mat->colorat = checkermat_colorat;
 	mat->mirror = 0.0;
+	mat->shiny = shiny;
+	mat->transparency = 0.0;
 }
 
-void mirrormat_init(Material * mat, float mirror)
+void mirrormat_init(Material * mat, float mirror, float shiny)
 {
 	mat->colorat = mirrormat_colorat;
 	mat->mirror = mirror;
+	mat->shiny = shiny;
+	mat->transparency = 0.0;
 }
 
 struct Solid
@@ -156,14 +163,21 @@ void halfspace_init(Solid * solid, const Vector3 * pos, const Vector3 * norm, Ma
 struct Scene
 {
 	Solid	*	solids;
-	Vector3		light;
+	Vector3		lightDirection, lightSpectrum;
+	float		lightAlpha, lightAlphaCos, lightAlphaSin;	
 }
 
 void scene_init(Scene * scene)
 {
 	scene->solids = nullptr;
-	scene->light.v[0] = -2; scene->light.v[1] = 1; scene->light.v[2] = -1;
-	vec3_norm(&scene->light);	
+	scene->lightDirection.v[0] = -2; scene->lightDirection.v[1] = 1; scene->lightDirection.v[2] = -1;
+	vec3_norm(&scene->lightDirection);	
+	scene->lightAlpha = 0.1
+	scene->lightAlphaCos = cos(scene->lightAlpha);
+	scene->lightAlphaSin = sin(scene->lightAlpha);
+	scene->lightSpectrum.v[0] = 320;
+	scene->lightSpectrum.v[1] = 320;
+	scene->lightSpectrum.v[2] = 320;
 }
 
 void scene_add_solid(Scene * scene, Solid * solid)
@@ -192,65 +206,106 @@ bool scene_intersects(Scene * scene, const Vector3 * pos, const Vector3 * dir, S
 	return false;
 }
 
-Vector3 scene_trace(Scene * scene, const Vector3 * pos, const Vector3 * dir)
+static inline float frand(void)
 {
-	float		distance = infinity;
-	Solid * 	shape = scene->solids, * nearest = nullptr;
+	return (rand() >> 1) * (1.0 / 32768);
+}
 
-	while (shape)
+Vector3 scene_trace(Scene * scene, Vector3 pos, Vector3 dir)
+{
+	Vector3	filter;
+	filter.v[0] = 1.0;
+	filter.v[1] = 1.0;
+	filter.v[2] = 1.0;
+
+	Vector3	color;
+	color.v[0] = 0.0;
+	color.v[1] = 0.0;
+	color.v[2] = 0.0;
+
+	char	depth = 0;
+	bool	useLights = true;
+
+	while (vec3_qlength(&filter) > 0.0001 && depth < 10)
 	{
-		float	sd = shape->distance(shape, pos, dir);
-		if (sd > 0 && sd < distance) {
-			nearest = shape;
-			distance = sd;
-		}
-		shape = shape->next;
-	}
 
-	if (nearest) 
-	{
-		Vector3	at, norm;
-		vec3_lincomb(&at, pos, distance, dir);
-		norm = nearest->normal(nearest, &at);
+		float		distance = infinity;
+		Solid * 	shape = scene->solids, * nearest = nullptr;
 
-		if (nearest->material->mirror > 0) 
+		while (shape)
 		{
-			Vector3	ndir, nat;
+			float	sd = shape->distance(shape, &pos, &dir);
+			if (sd > 0 && sd < distance) {
+				nearest = shape;
+				distance = sd;
+			}
+			shape = shape->next;
+		}
 
-			vec3_lincomb(&ndir, dir, -2.0 * vec3_vmul(dir, &norm), &norm);
-			vec3_lincomb(&nat, &at, epsilon, &ndir);
+		Vector3	at, norm;
 
-			Vector3	color = scene_trace(scene, &nat, &ndir);
-			vec3_scale(&color, nearest->material->mirror);
+		if (nearest) 
+		{
+			useLights = true;
 
-			return color;
+			vec3_scale(&filter, 1 / (1 + distance * distance * 0.000001));
+
+			vec3_lincomb(&at, &pos, distance, &dir);
+			norm = nearest->normal(nearest, &at);
+
+			float	rnd = frand();
+
+			if (rnd < nearest->material->mirror) 
+			{
+				vec3_lincomb(&dir, &dir, -2.0 * vec3_vmul(&dir, &norm), &norm);
+
+				if (nearest->material->shiny < 100) 
+				{
+					float chi1 = frand(), chi2 = pow(frand(), shape->material->shiny);
+
+					vec3_bend(&dir, &dir, chi1, chi2);
+				}
+			}
+			else
+			{
+				Vector3	ncolor = nearest->colorat(nearest, &at);
+				vec3_cmul(&filter, &filter, &ncolor);
+
+				float	chif = scene->lightAlphaSin; chif *= chif;
+				float	chi1 = frand(), chi2 = frand() * chif;
+
+				Vector3	ld;
+				vec3_bend(&ld, &scene->lightDirection, chi1, chi2);
+				
+				float l = vec3_vmul(&norm, &ld);
+				if (l > 0 && !scene_intersects(scene, &at, &ld, nearest)) {
+					vec3_mscadd(&color, l * chif, &scene->lightSpectrum, &filter);
+				}
+
+				chi1 = frand(); chi2 = frand();
+				vec3_bend(&dir, &norm, chi1, chi2);
+			}
 		}
 		else
 		{
-			Vector3	color = nearest->colorat(nearest, &at);
-
-			float	light = 0.1;
-
-			if (!scene_intersects(scene, &at, &scene->light, nearest)) 
+			float l = vec3_vmul(&dir, &scene->lightDirection);
+			if (l >= scene->lightAlphaCos && useLights)
+				vec3_mcadd(&color, &filter, &scene->lightSpectrum);
+			else if (dir.v[1] > 0)
 			{
-		
-
-				float lcos = vec3_vmul(&scene->light, &norm);
-				if (lcos > 0)
-					light += 0.9 * lcos;
+				Vector3	scolor;
+				vec3_lincomb(&scolor, &SkyBaseColor, 1.0 - dir.v[1], &SkyHorizonColor);
+				vec3_mcadd(&color, &filter, &scolor);
 			}
-
-			vec3_scale(&color, light);
 
 			return color;
 		}
+
+		vec3_lincomb(&pos, &at, epsilon, &dir);
+		depth++;
 	}
-	else
-	{
-		Vector3	color;
-		vec3_lincomb(&color, &SkyBaseColor, 1.0 - dir->v[1], &SkyHorizonColor);
-		return color;
-	}
+
+	return color;
 }
 
 
@@ -295,23 +350,41 @@ Vector3 trace_pixel(Scene * scene, int ix, int iy)
 {
 	float	tx = (float)ix, ty = (float)iy;
 
-	float dx = (tx - width / 2) / width;
-	float dy = (height / 2 - ty) / width;
+	Vector3	cs;
+	cs.v[0] = 0.0;
+	cs.v[1] = 0.0;
+	cs.v[2] = 0.0;
 
-	Vector3	vn;
+	for(char i=0; i<16; i++)
+	{
+		Vector3	vn;
 
-	vec3_lincomb2(&vn, &viewZ, dx, &viewX, dy, &viewY);
+		float dx = ((float)(tx - width / 2) + frand()) / width;
+		float dy = ((float)(height / 2 - ty) + frand()) / width;
 
-	vec3_norm(&vn);
 
-	Vector3	c = scene_trace(scene, &viewP, &vn);
+		vec3_lincomb2(&vn, &viewZ, dx, &viewX, dy, &viewY);
 
-	return c;
+		vec3_norm(&vn);
+
+		Vector3	c = scene_trace(scene, viewP, vn);
+
+		vec3_add(&cs, &c);
+	}
+
+	vec3_scale(&cs, 1.0 / 16.0);
+
+	return cs;
 }
 
 static char cscale(float f)
 {
-	int fi = 16 + (int)(f * 224);
+	if (f < 0)
+		return 0;
+	else if (f > 1)
+		return 255;
+
+	int fi = (int)(f * 255);
 	if (fi < 0)
 		return 0;
 	else if (fi > 255)
@@ -368,26 +441,26 @@ int main(void)
 	scene_init(&scene);
 
 	color1.v[0] = 0.0; color1.v[1] = 1.0; color1.v[2] = 0.0;
-	solidmat_init(&smat1, &color1);
+	solidmat_init(&smat1, &color1, 0.2, 4.0);
 
 	color1.v[0] = 1.0; color1.v[1] = 0.0; color1.v[2] = 0.0;
-	solidmat_init(&smat2, &color1);
+	solidmat_init(&smat2, &color1, 0.0, 10.0);
 
 	color1.v[0] = 1.0; color1.v[1] = 1.0; color1.v[2] = 1.0;
 	color2.v[0] = 0.2; color2.v[1] = 0.2; color2.v[2] = 0.2;	
-	checkermat_init(&cmat, &color1, &color2, 10);
+	checkermat_init(&cmat, &color1, &color2, 10, 100.0);
 
-	mirrormat_init(&mmat, 0.9);
+	mirrormat_init(&mmat, 0.9, 100.0);
 
-	pos.v[0] = -35; pos.v[1] = 0; pos.v[2] = 0;
+	pos.v[0] = -55; pos.v[1] = 0; pos.v[2] = 0;
 	sphere_init(&sphere1, &pos, 30, &smat1);
 	scene_add_solid(&scene, &sphere1);
 
-	pos.v[0] = 40; pos.v[1] = 10; pos.v[2] = 5;
+	pos.v[0] = 60; pos.v[1] = 10; pos.v[2] = 5;
 	sphere_init(&sphere2, &pos, 40, &smat2);
 	scene_add_solid(&scene, &sphere2);
 
-	pos.v[0] = 0; pos.v[1] = -30; pos.v[2] = 0;
+	pos.v[0] = -10; pos.v[1] = -30; pos.v[2] = 0;
 	norm.v[0] = 0; norm.v[1] = 1; norm.v[2] = 0;
 	halfspace_init(&ground, &pos, &norm, &cmat);
 	scene_add_solid(&scene, &ground);
