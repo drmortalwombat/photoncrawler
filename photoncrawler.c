@@ -3,7 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#include "vector3d.h"
+#include <gfx/vector3d.h>
 #include "rgbimage.h"
 
 Vector3 backgroundColor = {{0.7, 0.7, 1.0}};
