@@ -165,14 +165,14 @@ struct Scene
 	Solid	*	solids;
 	Vector3		lightDirection, lightSpectrum;
 	float		lightAlpha, lightAlphaCos, lightAlphaSin;	
-}
+};
 
 void scene_init(Scene * scene)
 {
 	scene->solids = nullptr;
 	scene->lightDirection.v[0] = -2; scene->lightDirection.v[1] = 1; scene->lightDirection.v[2] = -1;
 	vec3_norm(&scene->lightDirection);	
-	scene->lightAlpha = 0.1
+	scene->lightAlpha = 0.1;
 	scene->lightAlphaCos = cos(scene->lightAlpha);
 	scene->lightAlphaSin = sin(scene->lightAlpha);
 	scene->lightSpectrum.v[0] = 320;
